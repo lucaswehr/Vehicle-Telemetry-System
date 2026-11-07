@@ -9,6 +9,9 @@ static size_t len = 0;
 static GpsFix current;
 static GpsTiming timing;    
 
+static uint32_t fixCounter = 0;
+uint32_t gpsFixCount() { return fixCounter; }
+
 static void sendUbx(uint8_t cls, uint8_t id, const uint8_t* payload, uint16_t n) {
   uint8_t buf[32];
   size_t len = ubxEncode(cls, id, payload, n, buf);
@@ -54,6 +57,7 @@ bool gpsPoll(GpsFix& fix) {
         timing.lastByteMs = millis();
         timing.anyByte = true;
         if (nmeaParseLine(line, current)) {
+          if (line[3] == 'R' && line[4] == 'M' && line[5] == 'C') fixCounter++;
           updated = true;
           sentenceCount++;
           if (current.valid) {
