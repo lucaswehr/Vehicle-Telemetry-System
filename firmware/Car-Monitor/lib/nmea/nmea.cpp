@@ -63,6 +63,7 @@ bool nmeaParseLine(const char* line, GpsFix& fix) {
   if (std::strcmp(type, "RMC") == 0 && n >= 10) {
     fix.valid = (f[2][0] == 'A');
     fix.utcTime    = static_cast<uint32_t>(std::atol(f[1]));
+    fix.utcDate    = static_cast<uint32_t>(std::atol(f[9]));   // set even without a fix
     if (fix.valid) {
       fix.lat        = toDegrees(f[3], f[4][0]);
       fix.lon        = toDegrees(f[5], f[6][0]);

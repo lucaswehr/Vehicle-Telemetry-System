@@ -9,6 +9,7 @@ struct GpsFix {
   float speedMph = 0, headingDeg = 0, altM = 0;
   uint8_t sats = 0;
   uint32_t utcTime = 0;   // hhmmss
+  uint32_t utcDate = 0;   // ddmmyy (UTC), 0 until the module reports one
 };
 
 bool nmeaChecksumOk(const char* line);

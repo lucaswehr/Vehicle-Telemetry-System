@@ -4,12 +4,15 @@
 #include <string.h>
 #include "logger.h"
 #include "logfmt.h"
+#include "tripname.h"
 
 static File     file;
 static uint8_t  buf[512];
 static size_t   used = 0;
 static uint32_t seq = 0, lastFixCount = 0, lastFlushMs = 0;
 static uint32_t records = 0, writeErrors = 0;
+static char     path[40] = "";
+static bool     renamedForDate = false;
 
 static void flushBuf() {
   if (!file || used == 0) return;
@@ -17,6 +20,26 @@ static void flushBuf() {
   file.flush();
   used = 0;
   lastFlushMs = millis();
+}
+
+// Once the GPS reports a date, give the trip a date-based name. Keeps all data written so far.
+static void renameForDate(uint32_t ddmmyy) {
+  if (renamedForDate || !tripDateValid(ddmmyy)) return;
+  renamedForDate = true;                            // try once only
+
+  char name[40];
+  int n = 1;
+  do {
+    if (!tripName(name, sizeof name, ddmmyy, n++)) return;
+  } while (SD.exists(name) && n < 1000);
+
+  flushBuf();                                       // nothing buffered may be lost
+  file.close();
+  const char* use = SD.rename(path, name) ? name : path;   // on failure keep the old name
+  file = SD.open(use, FILE_APPEND);
+  if (!file) { writeErrors++; return; }
+  if (use == name) strncpy(path, name, sizeof path - 1);
+  Serial.printf("trip renamed to %s\n", path);
 }
 
 bool loggerInit() {
@@ -28,6 +51,7 @@ bool loggerInit() {
     snprintf(name, sizeof name, "/trip_%04d.bin", n++);
   } while (SD.exists(name) && n < 10000);
 
+  strncpy(path, name, sizeof path - 1);
   file = SD.open(name, FILE_WRITE);
   if (!file) return false;
 
@@ -38,6 +62,9 @@ bool loggerInit() {
 }
 
 void loggerUpdate(const GpsFix& fix, GpsStatus st, uint32_t fixCount) {
+  if (!file) return;
+
+  renameForDate(fix.utcDate);
   if (!file) return;
 
   if (fixCount != lastFixCount) {                   // a new position update arrived
