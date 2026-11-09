@@ -1,4 +1,3 @@
-#include <Arduino.h>
 #include <unity.h>
 #include <math.h>
 #include "nmea.h"
@@ -45,8 +44,7 @@ void test_date_present_without_fix() {
   TEST_ASSERT_EQUAL_UINT32(311026, f.utcDate);
 }
 
-void setup() {
-  delay(2000);
+int main() {
   UNITY_BEGIN();
   RUN_TEST(test_checksum_good);
   RUN_TEST(test_checksum_bad);
@@ -55,9 +53,5 @@ void setup() {
   RUN_TEST(test_no_fix_is_invalid);
   RUN_TEST(test_rmc_date);
   RUN_TEST(test_date_present_without_fix);
-  UNITY_END();
-}
-
-void loop() {
-  delay(1000);
+  return UNITY_END();
 }

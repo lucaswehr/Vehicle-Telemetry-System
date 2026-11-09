@@ -1,4 +1,3 @@
-#include <Arduino.h>
 #include <unity.h>
 #include "gps_status.h"
 
@@ -23,17 +22,12 @@ void test_millis_wraparound() {
   TEST_ASSERT_EQUAL(GpsStatus::OK, gpsStatus(100, t));   // clock wrapped, only ~356 ms passed
 }
 
-void setup() {
-  delay(2000);
+int main() {
   UNITY_BEGIN();
   RUN_TEST(test_never_heard_is_link_lost);
   RUN_TEST(test_fresh_fix_is_ok);
   RUN_TEST(test_talking_but_old_fix_is_no_fix);
   RUN_TEST(test_silent_module_is_link_lost);
   RUN_TEST(test_millis_wraparound);
-  UNITY_END();
-}
-
-void loop() {
-  delay(1000);
+  return UNITY_END();
 }
