@@ -6,6 +6,7 @@
 #include "logfmt.h"
 #include "tripname.h"
 #include "sdstate.h"
+#include "metrics.h"
 
 static const int SD_CS_PIN = 5;
 static const uint32_t SD_SPI_HZ = 4000000;   // use whichever speed passed your SD test
@@ -19,6 +20,10 @@ static uint32_t records = 0, dropped = 0, writeErrors = 0;
 static char     path[40] = "";
 static bool     renamedForDate = false;
 static SdHealth health;
+
+// Timing (microseconds). The window stat is reset each time main reads it; the total never is.
+static Stat     flushWin, flushAll;
+static uint32_t mountMaxUs = 0;
 
 // Close everything and release the card so a later SD.begin() starts from a clean state.
 static void dropCard() {
@@ -34,6 +39,7 @@ static void dropCard() {
 // Writes the buffer. Returns false if the write failed.
 static bool flushBuf() {
   if (!file || used == 0) return true;
+  uint32_t t0 = micros();
   bool ok = (file.write(buf, used) == used);
   if (ok) {
     file.flush();
@@ -46,6 +52,9 @@ static bool flushBuf() {
   } else {
     writeErrors++;
   }
+  uint32_t dt = micros() - t0;
+  statRecord(flushWin, dt);
+  statRecord(flushAll, dt);
   return ok;
 }
 
@@ -53,6 +62,16 @@ static bool flushBuf() {
 // but give up on the file after SD_MAX_WRITE_FAILS in a row.
 static void noteFlush(bool ok) {
   if (sdOnWriteResult(health, ok, millis())) dropCard();
+}
+
+// Times a mount attempt: SD.begin() blocks while it looks for the card, which stalls the loop.
+static bool mountAndOpen();
+static bool timedMount() {
+  uint32_t t0 = micros();
+  bool ok = mountAndOpen();
+  uint32_t dt = micros() - t0;
+  if (dt > mountMaxUs) mountMaxUs = dt;
+  return ok;
 }
 
 // Mount the card, pick the first unused trip name and write the file header.
@@ -98,7 +117,7 @@ static void renameForDate(uint32_t ddmmyy) {
 }
 
 bool loggerInit() {
-  bool ok = mountAndOpen();
+  bool ok = timedMount();
   sdOnMountResult(health, ok, millis());
   if (!ok) Serial.println("SD: mount failed, will keep retrying");
   return ok;
@@ -107,7 +126,7 @@ bool loggerInit() {
 void loggerUpdate(const GpsFix& fix, GpsStatus st, uint32_t fixCount) {
   // 1. Card not available: retry with backoff. NOTE: SD.begin() blocks while it waits for a card.
   if (health.state == SdState::UNMOUNTED && sdShouldRetry(health, millis())) {
-    bool ok = mountAndOpen();
+    bool ok = timedMount();
     sdOnMountResult(health, ok, millis());
     if (ok) Serial.printf("SD: recovered (remount #%lu)\n", (unsigned long)health.remounts);
   }
@@ -170,3 +189,11 @@ uint32_t loggerDropped()       { return dropped; }
 uint32_t loggerWriteErrors()   { return writeErrors; }
 uint32_t loggerRemounts()      { return health.remounts; }
 uint32_t loggerMountFailures() { return health.mountFailures; }
+
+Stat loggerFlushTakeWindow() {
+  Stat out = flushWin;
+  statReset(flushWin);
+  return out;
+}
+const Stat& loggerFlushTotal() { return flushAll; }
+uint32_t loggerMountMaxUs()    { return mountMaxUs; }
