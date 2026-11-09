@@ -2,10 +2,19 @@
 #include "gps.h"
 #include "logger.h"
 
+static const char* gpsLabel(GpsStatus st) {
+  switch (st) {
+    case GpsStatus::OK:        return "FIX OK";
+    case GpsStatus::NO_FIX:    return "NO FIX";
+    case GpsStatus::LINK_LOST: return "LINK LOST";
+  }
+  return "?";
+}
+
 void setup() {
   Serial.begin(115200);
   gpsInit();
-  if (!loggerInit()) Serial.println("LOGGER INIT FAILED (check SD wiring and card)");
+  loggerInit();   // a failure here is no longer fatal: loggerUpdate() keeps retrying
 }
 
 void loop() {
@@ -16,9 +25,12 @@ void loop() {
   static uint32_t last = 0;
   if (millis() - last >= 1000) {
     last = millis();
-    Serial.printf("status %d | records %lu | write errors %lu\n",
-                  (int)gpsGetStatus(),
+    Serial.printf("gps %s | sd %s | records %lu | dropped %lu | write errors %lu | remounts %lu\n",
+                  gpsLabel(gpsGetStatus()),
+                  loggerState() == SdState::LOGGING ? "OK" : "DOWN",
                   (unsigned long)loggerRecords(),
-                  (unsigned long)loggerWriteErrors());
+                  (unsigned long)loggerDropped(),
+                  (unsigned long)loggerWriteErrors(),
+                  (unsigned long)loggerRemounts());
   }
 }
