@@ -11,6 +11,10 @@
 static const int SD_CS_PIN = 5;
 static const uint32_t SD_SPI_HZ = 4000000;   // use whichever speed passed your SD test
 
+// File names use local dates. The GPS reports UTC; this is the zone's standard-time offset in whole
+// hours (-8 = Pacific). US daylight saving time (+1 hour) is applied automatically from the GPS date.
+static const int LOCAL_STD_OFFSET_HOURS = -8;
+
 static File     file;
 static uint8_t  buf[512];
 static size_t   used = 0;
@@ -96,9 +100,11 @@ static bool mountAndOpen() {
   return true;
 }
 
-// Once the GPS reports a date, give the trip a date-based name. Keeps all data written so far.
-static void renameForDate(uint32_t ddmmyy) {
-  if (renamedForDate || !tripDateValid(ddmmyy)) return;
+// Once the GPS reports a date, give the trip a date-based name (local date). Keeps all data written so far.
+static void renameForDate(uint32_t utcDate, uint32_t utcTime) {
+  uint32_t ddmmyy;
+  int offset = LOCAL_STD_OFFSET_HOURS + (usDstActive(utcDate, utcTime, LOCAL_STD_OFFSET_HOURS) ? 1 : 0);
+  if (renamedForDate || !utcToLocalDate(utcDate, utcTime, offset, ddmmyy)) return;
   renamedForDate = true;                     // try once only
 
   char name[40];
@@ -131,7 +137,7 @@ void loggerUpdate(const GpsFix& fix, GpsStatus st, uint32_t fixCount) {
     if (ok) Serial.printf("SD: recovered (remount #%lu)\n", (unsigned long)health.remounts);
   }
 
-  if (health.state == SdState::LOGGING) renameForDate(fix.utcDate);
+  if (health.state == SdState::LOGGING) renameForDate(fix.utcDate, fix.utcTime);
 
   // 2. A new position update arrived: build the record. The sequence number always advances,
   //    so records lost during an outage show up as a sequence gap in read_trip.py.
