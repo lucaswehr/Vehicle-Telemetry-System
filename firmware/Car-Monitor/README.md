@@ -5,8 +5,9 @@ format with per-record CRCs, plus a Python tool that verifies and summarizes the
 It is being built in stages: a single-loop baseline first, then more sensors, then FreeRTOS tasks,
 with measurements at each step.
 
-**Status:** GPS and SD logging work on the bench. Not yet built: IMU, barometer, OBD-II (ELM327),
-display, FreeRTOS tasks. Nothing has been tested in the car yet.
+**Status:** GPS and SD logging work on the bench and on two short test drives (both logs read back
+with no CRC failures, sequence gaps or stalls). Not yet built: IMU, barometer, OBD-II (ELM327),
+display, FreeRTOS tasks.
 
 ## What works today
 
@@ -14,9 +15,15 @@ display, FreeRTOS tasks. Nothing has been tested in the car yet.
   (`LINK_LOST` / `NO_FIX` / `OK`)
 - u-blox NEO-7M configured over UBX to 5 Hz, with unused sentences switched off to fit 9600 baud
 - Binary log format with sequence numbers, timestamps and CRC-16, one file per trip
+- A trip file is created only when the car is moving: a valid fix and a speed above 5 mph for 5
+  records in a row. The last 5 s before that are kept in RAM and written first, so the start of the
+  drive is not lost. Sitting parked, or creeping below 5 mph, creates no files
 - SD failure handling: retry with backoff if the card is missing, drop and recover if it is
   removed mid-trip, count every record that could not be saved
-- Trip files named by local date (`2026-11-08_trip2.bin`), renamed once the GPS reports the date
+- Trip files named by local date at creation (`2026-11-08_trip2.bin`), with US daylight saving
+- Low-space handling: free space is measured when the card mounts; below 50 MB the oldest trip
+  files are deleted (only files with this logger's names) until 100 MB is free, and logging stops
+  cleanly (`FULL`) if the card runs out
 - Timing instrumentation (loop period, SD flush time, mount stalls)
 - `tools/read_trip.py`: verifies every CRC, detects sequence gaps, stalls and truncated tails,
   reports distance/speed, exports CSV, plots the route
@@ -34,13 +41,15 @@ display, FreeRTOS tasks. Nothing has been tested in the car yet.
 
 ```
 pio run -e esp32dev -t upload     # build and flash the logger
+pio run -e bench -t upload        # same, but logs without waiting for movement (desk testing)
 pio device monitor                # serial status at 115200
 pio test -e native                # unit tests on the PC (run in WSL on Windows)
 pio run -e sd_test -t upload      # standalone SD card bring-up test
 ```
 
-The serial monitor prints two lines per second: GPS status, SD state, records, dropped records,
-write errors, remounts, and a `perf` line with loop and flush timings.
+The serial monitor prints two lines per second: GPS status, SD state (`READY (waiting for
+movement)`, `LOGGING`, `DOWN` or `FULL`), estimated free space, records, dropped records, write
+errors, remounts, and a `perf` line with loop and flush timings.
 
 ## Reading a log
 
@@ -80,7 +89,7 @@ region costs only the records inside it.
 
 ```
 lib/      pure logic, no Arduino calls, unit-tested on the PC
-  nmea/ gps_status/ ubx/ logfmt/ sdstate/ tripname/ metrics/
+  nmea/ gps_status/ ubx/ logfmt/ sdstate/ tripname/ metrics/ movetrigger/ preroll/
 src/      hardware code: gps.cpp, logger.cpp, main.cpp, sd_test.cpp
 test/     one folder per library (Unity)
 tools/    read_trip.py, make_test_trip.py
@@ -88,7 +97,7 @@ docs/     baseline_results.md
 ```
 
 Decisions that need an SD card or a UART live in `src/`; everything with a rule in it (parsing,
-the SD retry/backoff state machine, file naming, statistics) lives in `lib/` so it can be tested
+the SD retry/backoff state machine, the start-of-drive trigger, file naming, statistics) lives in `lib/` so it can be tested
 without hardware.
 
 ## Measured results (single-loop baseline)
@@ -122,7 +131,9 @@ These stalls are what the FreeRTOS version will be measured against.
   but after any stall longer than a second the print fires in that same pass, so the biggest
   stalls were exactly the samples dropped. Now the print time is subtracted instead.
 - **Trip names had tomorrow's date.** The GPS reports UTC, so evening trips in Pacific time were
-  labeled with the next day. File names now use a local date computed from the zone's UTC offset, with the US daylight saving rules applied.
+  labeled with the next day. File names now use a local date computed from the zone's UTC offset,
+  with the US daylight saving rules applied. The name is chosen when the file is created (which now
+  happens once the car is moving, so the GPS date is always valid), so there is no rename step.
 
 ## Known limitations
 
@@ -130,9 +141,16 @@ These stalls are what the FreeRTOS version will be measured against.
 - The 5 Hz GPS setting is sent once at boot and not verified. During bring-up it was seen to fail
   silently on a cold boot.
 - `SD.begin()` blocks for about a second while looking for a missing card, which stalls GPS reading.
-- Every boot, and every card recovery, starts a new file, so short tests leave many small files.
+- Nothing is logged below 5 mph, so a slow crawl or a stay in a parking lot is not recorded. Once a
+  trip has started it keeps logging until power-off, including stops.
+- While waiting for movement nothing is written, so a card pulled while parked goes unnoticed until
+  the car moves; the first write then fails and the normal retry takes over.
+- Free space is read once when the card mounts, because on a large FAT card that call can block for
+  seconds (not yet measured on this hardware). Space used afterwards is tracked by counting bytes.
+- The low-space cleanup deletes the oldest trips without asking, so copy trips off the card
+  you want to keep.
 - Pulling the card mid-write can corrupt the card's file system. The firmware survives it; the card may not.
-- One card and one SD module have been tested, on the bench only.
+- One card and one SD module have been tested, on the bench and on two short drives.
 
 ## Roadmap
 
@@ -140,4 +158,3 @@ These stalls are what the FreeRTOS version will be measured against.
 2. OBD-II over an ELM327 Bluetooth adapter, with a parser tested against recorded replies
 3. FreeRTOS tasks (sensors, logging, display) and a before/after comparison of the baseline numbers
 4. Display, parked-battery-drain alarm with deep sleep
-5. Low-space cleanup on the SD card

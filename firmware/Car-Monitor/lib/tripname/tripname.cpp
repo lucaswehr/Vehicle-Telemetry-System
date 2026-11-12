@@ -1,3 +1,4 @@
+#include <string.h>
 #include "tripname.h"
 #include <stdio.h>
 
@@ -68,3 +69,51 @@ bool usDstActive(uint32_t utcDdmmyy, uint32_t utcHhmmss, int stdOffsetHours) {
   int endHourUtc = 2 - (stdOffsetHours + 1);        // ends 2:00 local daylight time, first Sunday
   return d < firstSunday || (d == firstSunday && hh < endHourUtc);
 }
+
+static bool allDigits(const char* s, int n) {
+  for (int i = 0; i < n; i++) if (s[i] < '0' || s[i] > '9') return false;
+  return true;
+}
+static int toInt(const char* s, int n) {
+  int v = 0;
+  for (int i = 0; i < n; i++) v = v * 10 + (s[i] - '0');
+  return v;
+}
+static bool startsWithCi(const char* s, const char* prefix) {
+  for (; *prefix; s++, prefix++) if (((*s) | 0x20) != *prefix && *s != *prefix) return false;
+  return true;
+}
+static bool endsWithBin(const char* s) {
+  size_t n = strlen(s);
+  return n >= 4 && s[n - 4] == '.' && (s[n - 3] | 0x20) == 'b' && (s[n - 2] | 0x20) == 'i' && (s[n - 1] | 0x20) == 'n';
+}
+
+bool parseTripName(const char* name, uint32_t& sortKey) {
+  if (!name) return false;
+  if (name[0] == '/') name++;
+  size_t len = strlen(name);
+  if (!endsWithBin(name)) return false;
+
+  // Older style: trip_NNNN.bin
+  if (len == 13 && startsWithCi(name, "trip") && name[4] == '_' && allDigits(name + 5, 4)) {
+    int n = toInt(name + 5, 4);
+    if (n < 1) return false;
+    sortKey = (uint32_t)n;
+    return true;
+  }
+
+  // Dated style: YYYY-MM-DD_tripN.bin with N = 1..999
+  if (len < 20 || len > 22) return false;
+  if (!allDigits(name, 4) || name[4] != '-' || !allDigits(name + 5, 2) || name[7] != '-' ||
+      !allDigits(name + 8, 2) || name[10] != '_' || !startsWithCi(name + 11, "trip"))
+    return false;
+  int digits = (int)len - 15 - 4;                     // characters between "trip" and ".bin"
+  if (digits < 1 || digits > 3 || !allDigits(name + 15, digits)) return false;
+  int y = toInt(name, 4), m = toInt(name + 5, 2), d = toInt(name + 8, 2), n = toInt(name + 15, digits);
+  if (n < 1) return false;
+  uint32_t ddmmyy = (uint32_t)d * 10000u + (uint32_t)m * 100u + (uint32_t)(y % 100);
+  if (y < 2024 || y > 2049 || !tripDateValid(ddmmyy)) return false;
+  sortKey = (uint32_t)(((y % 100) * 10000 + m * 100 + d) * 1000 + n);
+  return true;
+}
+

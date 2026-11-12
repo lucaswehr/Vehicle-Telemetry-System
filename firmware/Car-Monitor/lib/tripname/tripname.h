@@ -20,3 +20,10 @@ bool utcToLocalDate(uint32_t utcDdmmyy, uint32_t utcHhmmss, int offsetHours, uin
 // local standard time on the second Sunday in March and ends at 2:00 am local daylight time on
 // the first Sunday in November. Returns false for an invalid date or time.
 bool usDstActive(uint32_t utcDdmmyy, uint32_t utcHhmmss, int stdOffsetHours);
+
+// Recognizes the file names this logger creates: "/2026-11-07_trip3.bin" (with or without the leading
+// slash) and the older "/trip_0001.bin". On success sets sortKey so that a smaller key means an older
+// trip (undated names sort before every dated one). Anything else, such as a file you copied onto the
+// card yourself, is rejected, so the cleanup can never delete it.
+bool parseTripName(const char* name, uint32_t& sortKey);
+

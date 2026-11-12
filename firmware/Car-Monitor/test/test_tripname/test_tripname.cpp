@@ -123,6 +123,57 @@ void test_local_date_uses_dst() {
   TEST_ASSERT_EQUAL_UINT32(140726, out);                     // 23:59:59 PDT on the 14th
 }
 
+// ---- parseTripName ----
+void test_parse_dated_names() {
+  uint32_t k = 0;
+  TEST_ASSERT_TRUE(parseTripName("/2026-11-09_trip16.bin", k));
+  TEST_ASSERT_EQUAL_UINT32(261109016u, k);
+  TEST_ASSERT_TRUE(parseTripName("2026-11-09_trip1.bin", k));      // no leading slash (newer SD library)
+  TEST_ASSERT_EQUAL_UINT32(261109001u, k);
+  TEST_ASSERT_TRUE(parseTripName("/2026-11-09_TRIP7.BIN", k));     // FAT may report upper case
+}
+void test_parse_old_style_names() {
+  uint32_t k = 0;
+  TEST_ASSERT_TRUE(parseTripName("/trip_0001.bin", k));
+  TEST_ASSERT_EQUAL_UINT32(1, k);
+  TEST_ASSERT_TRUE(parseTripName("trip_0042.bin", k));
+  TEST_ASSERT_EQUAL_UINT32(42, k);
+}
+void test_parse_rejects_other_files() {
+  uint32_t k = 0;
+  TEST_ASSERT_FALSE(parseTripName("/notes.txt", k));
+  TEST_ASSERT_FALSE(parseTripName("/System Volume Information", k));
+  TEST_ASSERT_FALSE(parseTripName("/2026-11-09_trip.bin", k));     // no trip number
+  TEST_ASSERT_FALSE(parseTripName("/2026-11-09_trip0.bin", k));
+  TEST_ASSERT_FALSE(parseTripName("/2026-13-09_trip1.bin", k));    // month 13
+  TEST_ASSERT_FALSE(parseTripName("/2026-11-09_trip1.bak", k));
+  TEST_ASSERT_FALSE(parseTripName("/2026-11-09_trip1234.bin", k));
+  TEST_ASSERT_FALSE(parseTripName("/my_2026-11-09_trip1.bin", k));
+  TEST_ASSERT_FALSE(parseTripName("/trip_00.bin", k));
+  TEST_ASSERT_FALSE(parseTripName("/2124-11-09_trip1.bin", k));    // year out of range
+  TEST_ASSERT_FALSE(parseTripName("", k));
+  TEST_ASSERT_FALSE(parseTripName(nullptr, k));
+}
+void test_parse_sort_order_is_chronological() {
+  uint32_t old1 = 0, a = 0, b = 0, c = 0, d = 0;
+  parseTripName("/trip_0099.bin", old1);
+  parseTripName("/2026-11-09_trip2.bin", a);
+  parseTripName("/2026-11-09_trip10.bin", b);                      // 10 must sort after 2 (not as text)
+  parseTripName("/2026-11-10_trip1.bin", c);
+  parseTripName("/2027-01-02_trip1.bin", d);
+  TEST_ASSERT_TRUE(old1 < a);
+  TEST_ASSERT_TRUE(a < b);
+  TEST_ASSERT_TRUE(b < c);
+  TEST_ASSERT_TRUE(c < d);
+}
+void test_parse_accepts_what_tripname_makes() {
+  char name[40];
+  uint32_t k = 0;
+  TEST_ASSERT_TRUE(tripName(name, sizeof name, 91126, 123));
+  TEST_ASSERT_TRUE(parseTripName(name, k));
+  TEST_ASSERT_EQUAL_UINT32(261109123u, k);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_name_format);
@@ -147,5 +198,10 @@ int main() {
   RUN_TEST(test_dst_other_us_zone);
   RUN_TEST(test_dst_rejects_bad_input);
   RUN_TEST(test_local_date_uses_dst);
+  RUN_TEST(test_parse_dated_names);
+  RUN_TEST(test_parse_old_style_names);
+  RUN_TEST(test_parse_rejects_other_files);
+  RUN_TEST(test_parse_sort_order_is_chronological);
+  RUN_TEST(test_parse_accepts_what_tripname_makes);
   return UNITY_END();
 }

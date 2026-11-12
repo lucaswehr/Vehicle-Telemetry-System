@@ -12,6 +12,16 @@ static const char* gpsLabel(GpsStatus st) {
   return "?";
 }
 
+static const char* sdLabel(SdState st) {
+  switch (st) {
+    case SdState::ARMED:     return "READY (waiting for movement)";
+    case SdState::LOGGING:   return "LOGGING";
+    case SdState::UNMOUNTED: return "DOWN";
+    case SdState::FULL:      return "FULL";
+  }
+  return "?";
+}
+
 void setup() {
   Serial.begin(115200);
   gpsInit();
@@ -41,9 +51,10 @@ void loop() {
   if (millis() - last >= 1000) {
     last = millis();
     uint32_t p0 = micros();
-    Serial.printf("gps %s | sd %s | records %lu | dropped %lu | write errors %lu | remounts %lu\n",
+    Serial.printf("gps %s | sd %s | free %lu MB | records %lu | dropped %lu | write errors %lu | remounts %lu\n",
                   gpsLabel(gpsGetStatus()),
-                  loggerState() == SdState::LOGGING ? "OK" : "DOWN",
+                  sdLabel(loggerState()),
+                  (unsigned long)loggerFreeMb(),
                   (unsigned long)loggerRecords(),
                   (unsigned long)loggerDropped(),
                   (unsigned long)loggerWriteErrors(),

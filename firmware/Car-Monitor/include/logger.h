@@ -6,12 +6,15 @@
 
 bool loggerInit();                       // tries to mount once; returns true if logging started
 void loggerUpdate(const GpsFix& fix, GpsStatus st, uint32_t fixCount);
+// State: ARMED = card ready, waiting for the car to move (no file yet); LOGGING = trip file open;
+// UNMOUNTED = card missing or failed; FULL = out of space.
 SdState  loggerState();
 uint32_t loggerRecords();                // records written into the log (or buffered for it)
 uint32_t loggerDropped();                // records lost because the card was unavailable or a write failed
 uint32_t loggerWriteErrors();
 uint32_t loggerRemounts();               // successful re-mounts after a failure
 uint32_t loggerMountFailures();
+uint32_t loggerFreeMb();                 // estimated free space on the card, in MB
 
 // Timing, in microseconds (see lib/metrics).
 Stat loggerFlushTakeWindow();            // flush durations since the last call; resets the window
