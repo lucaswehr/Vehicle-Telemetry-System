@@ -42,6 +42,11 @@ uint8_t elmPidDataBytes(uint8_t pid);
 // status `value` is left untouched, so a failed read can never look like a real zero.
 ElmStatus elmParseMode01(const char* raw, uint8_t pid, float& value);
 
+// Same as elmParseMode01, but returns the PID's data bytes exactly as the car sent them (A, B, ...)
+// instead of a converted number. `out` must hold 4 bytes; `n` is set to the byte count on OK, and
+// both are left untouched on any other status. This is what goes into the log.
+ElmStatus elmParseMode01Raw(const char* raw, uint8_t pid, uint8_t* out, uint8_t& n);
+
 const char* elmStatusName(ElmStatus s);
 
 // Builds the request text for a mode 01 PID, for example PID 0x0C gives "010C" (without the carriage

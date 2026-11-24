@@ -134,6 +134,18 @@ ElmStatus elmParseMode01(const char* raw, uint8_t pid, float& value) {
   return s;
 }
 
+ElmStatus elmParseMode01Raw(const char* raw, uint8_t pid, uint8_t* out, uint8_t& n) {
+  uint8_t need = elmPidDataBytes(pid);
+  if (need == 0 || !out) return ElmStatus::UNSUPPORTED_PID;
+  uint8_t d[4];
+  ElmStatus s = extractData(raw, pid, need, d);
+  if (s == ElmStatus::OK) {
+    for (uint8_t i = 0; i < need; i++) out[i] = d[i];
+    n = need;
+  }
+  return s;
+}
+
 bool elmMode01Request(uint8_t pid, char* out, size_t cap, uint8_t responses) {
   size_t need = responses ? 6 : 5;
   if (!out || cap < need || responses > 9) return false;
