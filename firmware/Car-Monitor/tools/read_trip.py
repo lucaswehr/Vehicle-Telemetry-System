@@ -6,8 +6,11 @@ Format (little-endian):
   record      : magic 0xA5, type, len, seq(u32), tMs(u32), payload, crc16(u16)
   GPS payload : latE7(i32) lonE7(i32) speedCentiMph(u16) altDeciM(i16)
                 headingDeci(u16) sats(u8) status(u8) utcMs(u32)    (20 bytes)
+  OBD payload : pid(u8) status(u8) nbytes(u8) raw[4]               (7 bytes)
   CRC         : CRC-16/CCITT-FALSE over magic..payload
-Status byte: 0 = LINK_LOST, 1 = NO_FIX, 2 = OK (trustworthy position)
+GPS status byte: 0 = LINK_LOST, 1 = NO_FIX, 2 = OK (trustworthy position)
+OBD status byte: 0 = OK, 1 = NO_DATA, 2 = ERROR. Only OK records carry data; the raw bytes are
+exactly what the car sent, and are converted to units here (see OBD_PIDS).
 """
 import argparse
 import math
@@ -18,9 +21,50 @@ MAGIC = 0xA5
 HEADER_LEN = 11
 MAX_PAYLOAD = 64
 REC_GPS = 1
+REC_ELM = 3
 MIN_MOVING_MPH = 5.0  # below this, GPS speed/position noise dominates
 GPS_FMT = "<iiHhHBBI"
 GPS_LEN = struct.calcsize(GPS_FMT)  # 20
+ELM_FMT = "<BBB4s"
+ELM_LEN = struct.calcsize(ELM_FMT)  # 7
+ELM_OK, ELM_NO_DATA, ELM_ERROR = 0, 1, 2
+PID_ADAPTER_VOLTAGE = 0xF0
+
+# pid: (name, unit, minimum data bytes, formula(raw bytes) -> value). Mirrors lib/elm_parse.
+OBD_PIDS = {
+    0x04: ("engine load",     "%",    1, lambda r: r[0] * 100 / 255),
+    0x05: ("coolant temp",    "C",    1, lambda r: r[0] - 40),
+    0x06: ("short fuel trim", "%",    1, lambda r: (r[0] - 128) * 100 / 128),
+    0x07: ("long fuel trim",  "%",    1, lambda r: (r[0] - 128) * 100 / 128),
+    0x0B: ("intake MAP",      "kPa",  1, lambda r: r[0]),
+    0x0C: ("RPM",             "rpm",  2, lambda r: (r[0] * 256 + r[1]) / 4),
+    0x0D: ("vehicle speed",   "km/h", 1, lambda r: r[0]),
+    0x0E: ("timing advance",  "deg",  1, lambda r: r[0] / 2 - 64),
+    0x0F: ("intake air temp", "C",    1, lambda r: r[0] - 40),
+    0x10: ("MAF",             "g/s",  2, lambda r: (r[0] * 256 + r[1]) / 100),
+    0x11: ("throttle",        "%",    1, lambda r: r[0] * 100 / 255),
+    0x42: ("ECU voltage",     "V",    2, lambda r: (r[0] * 256 + r[1]) / 1000),
+    PID_ADAPTER_VOLTAGE: ("adapter voltage", "V", 2, lambda r: (r[0] * 256 + r[1]) / 1000),
+}
+ELM_STATUS_NAMES = {ELM_OK: "OK", ELM_NO_DATA: "NO_DATA", ELM_ERROR: "ERROR"}
+
+
+def obd_value(pid, status, raw):
+    """Converted reading, or None when the record has no usable data (never 0 for NO DATA)."""
+    if status != ELM_OK or pid not in OBD_PIDS:
+        return None
+    name, unit, need, fn = OBD_PIDS[pid]
+    if len(raw) < need:
+        return None
+    return fn(raw)
+
+
+def obd_name(pid):
+    return OBD_PIDS[pid][0] if pid in OBD_PIDS else f"PID {pid:02X}"
+
+
+def obd_unit(pid):
+    return OBD_PIDS[pid][1] if pid in OBD_PIDS else ""
 
 
 def crc16(data: bytes) -> int:
@@ -44,7 +88,7 @@ def parse(data: bytes):
     """Walk the file. Returns (records, stats). Bad data costs one byte, then we resync."""
     stats = dict(version=None, header_ok=False, records=0, crc_failures=0,
                  bytes_skipped=0, unknown_types=0, seq_gaps=0, seq_missing=0,
-                 time_gaps=0, time_gap_ms=0, truncated_tail=0)
+                 time_gaps=0, time_gap_ms=0, truncated_tail=0, bad_obd=0)
     if data[:4] != b"TLOG" or len(data) < 5:
         return [], stats
     stats["header_ok"] = True
@@ -100,6 +144,14 @@ def parse(data: bytes):
             lat, lon, spd, alt, hdg, sats, status, utc = struct.unpack(GPS_FMT, payload)
             rec.update(lat=lat / 1e7, lon=lon / 1e7, mph=spd / 100.0, alt_m=alt / 10.0,
                        heading=hdg / 10.0, sats=sats, status=status, utc_ms=utc)
+        elif rtype == REC_ELM and length == ELM_LEN:
+            pid, status, nbytes, raw = struct.unpack(ELM_FMT, payload)
+            if status > ELM_ERROR or nbytes > 4 or (status != ELM_OK and nbytes != 0):
+                stats["bad_obd"] += 1          # CRC was fine but the contents make no sense
+            else:
+                raw = raw[:nbytes]
+                rec.update(pid=pid, obd_status=status, raw=raw,
+                           value=obd_value(pid, status, raw))
         else:
             stats["unknown_types"] += 1
         recs.append(rec)
@@ -113,8 +165,31 @@ def fmt_utc(ms):
     return f"{s // 3600:02d}:{(s // 60) % 60:02d}:{s % 60:02d} UTC"
 
 
+def summarize_obd(obd):
+    span = (obd[-1]["tms"] - obd[0]["tms"]) / 1000.0
+    ok = sum(1 for r in obd if r["obd_status"] == ELM_OK)
+    nd = sum(1 for r in obd if r["obd_status"] == ELM_NO_DATA)
+    er = sum(1 for r in obd if r["obd_status"] == ELM_ERROR)
+    rate = f", {len(obd) / span:.1f} records/s" if span > 0 else ""
+    print(f"  OBD records:         {len(obd)} (OK {ok}, NO_DATA {nd}, ERROR {er}){rate}")
+    print("  OBD readings (OK only; NO DATA / ERROR are counted, never averaged in):")
+    print(f"    {'signal':<16} {'n':>6} {'min':>9} {'mean':>9} {'max':>9}  unit   NO_DATA ERROR")
+    pids = sorted({r["pid"] for r in obd})
+    for pid in pids:
+        rs = [r for r in obd if r["pid"] == pid]
+        vals = [r["value"] for r in rs if r["value"] is not None]
+        n_nd = sum(1 for r in rs if r["obd_status"] == ELM_NO_DATA)
+        n_er = sum(1 for r in rs if r["obd_status"] == ELM_ERROR)
+        if vals:
+            stat = f"{min(vals):>9.1f} {sum(vals) / len(vals):>9.1f} {max(vals):>9.1f}"
+        else:
+            stat = f"{'-':>9} {'-':>9} {'-':>9}"
+        print(f"    {obd_name(pid):<16} {len(vals):>6} {stat}  {obd_unit(pid):<6} {n_nd:>7} {n_er:>5}")
+
+
 def summarize(path, recs, st):
     gps = [r for r in recs if "status" in r]
+    obd = [r for r in recs if "obd_status" in r]
     print(path)
     if not st["header_ok"]:
         print("  NOT A TLOG FILE (bad header)")
@@ -129,6 +204,10 @@ def summarize(path, recs, st):
         print(f"  truncated last record: {st['truncated_tail']} bytes (power cut mid-write)")
     if st["unknown_types"]:
         print(f"  unknown record types: {st['unknown_types']}")
+    if st["bad_obd"]:
+        print(f"  OBD records with impossible contents: {st['bad_obd']}")
+    if obd:
+        summarize_obd(obd)
     if not gps:
         return
 
@@ -168,6 +247,7 @@ def main():
     ap = argparse.ArgumentParser(description="Summarize a TLOG trip file")
     ap.add_argument("file")
     ap.add_argument("--csv", help="write GPS records to this CSV file")
+    ap.add_argument("--obd-csv", help="write OBD records to this CSV file (one row per reading)")
     ap.add_argument("--plot", action="store_true", help="plot the route and speed (needs matplotlib)")
     args = ap.parse_args()
 
@@ -184,6 +264,15 @@ def main():
                 f.write(f"{r['seq']},{r['tms']},{r['status']},{r['lat']:.7f},{r['lon']:.7f},"
                         f"{r['mph']:.2f},{r['alt_m']:.1f},{r['heading']:.1f},{r['sats']},{r['utc_ms']}\n")
         print(f"  wrote {len(gps)} rows to {args.csv}")
+    if args.obd_csv:
+        obd = [r for r in recs if "obd_status" in r]
+        with open(args.obd_csv, "w") as f:
+            f.write("seq,t_ms,pid,signal,status,value,unit,raw_hex\n")
+            for r in obd:
+                v = "" if r["value"] is None else f"{r['value']:.3f}"
+                f.write(f"{r['seq']},{r['tms']},{r['pid']:02X},{obd_name(r['pid'])},"
+                        f"{ELM_STATUS_NAMES[r['obd_status']]},{v},{obd_unit(r['pid'])},{r['raw'].hex()}\n")
+        print(f"  wrote {len(obd)} rows to {args.obd_csv}")
     if args.plot:
         try:
             import matplotlib.pyplot as plt

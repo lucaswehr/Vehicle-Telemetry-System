@@ -116,6 +116,122 @@ void test_file_header() {
   TEST_ASSERT_EQUAL_UINT8(LOG_FORMAT_VER, h[4]);
 }
 
+static ElmRecord rpmReading() {            // 41 0C 1A F8  ->  (0x1A*256+0xF8)/4 = 1726 rpm
+  ElmRecord e = {};
+  e.pid = 0x0C; e.status = ELM_STATUS_OK; e.nbytes = 2; e.raw[0] = 0x1A; e.raw[1] = 0xF8;
+  return e;
+}
+
+void test_elm_record_size() {
+  uint8_t buf[LOG_MAX_RECORD];
+  TEST_ASSERT_EQUAL(20, encodeElm(rpmReading(), 1, 1000, buf, sizeof buf));   // 11 + 7 + 2
+}
+
+void test_elm_round_trip() {
+  uint8_t buf[LOG_MAX_RECORD];
+  ElmRecord in = rpmReading();
+  size_t n = encodeElm(in, 7, 5000, buf, sizeof buf);
+  Record rec; size_t used;
+  TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decodeRecord(buf, n, rec, used));
+  TEST_ASSERT_EQUAL(REC_ELM, rec.type);
+  TEST_ASSERT_EQUAL_UINT32(7, rec.seq);
+  TEST_ASSERT_EQUAL_UINT32(5000, rec.tMs);
+  ElmRecord out;
+  TEST_ASSERT_TRUE(decodeElm(rec, out));
+  TEST_ASSERT_EQUAL_UINT8(0x0C, out.pid);
+  TEST_ASSERT_EQUAL_UINT8(ELM_STATUS_OK, out.status);
+  TEST_ASSERT_EQUAL_UINT8(2, out.nbytes);
+  TEST_ASSERT_EQUAL_UINT8(0x1A, out.raw[0]);
+  TEST_ASSERT_EQUAL_UINT8(0xF8, out.raw[1]);
+}
+
+void test_elm_unused_raw_bytes_are_zero() {
+  uint8_t buf[LOG_MAX_RECORD];
+  ElmRecord in = rpmReading();
+  in.raw[2] = 0xEE; in.raw[3] = 0xEE;          // junk past nbytes must not reach the file
+  encodeElm(in, 1, 0, buf, sizeof buf);
+  TEST_ASSERT_EQUAL_UINT8(0, buf[LOG_HEADER_BYTES + 5]);
+  TEST_ASSERT_EQUAL_UINT8(0, buf[LOG_HEADER_BYTES + 6]);
+}
+
+void test_elm_no_data_has_no_value() {
+  uint8_t buf[LOG_MAX_RECORD];
+  ElmRecord nd = {}; nd.pid = 0x0C; nd.status = ELM_STATUS_NO_DATA;
+  size_t n = encodeElm(nd, 1, 0, buf, sizeof buf);
+  TEST_ASSERT_TRUE(n > 0);
+  Record rec; size_t used; ElmRecord out;
+  decodeRecord(buf, n, rec, used);
+  TEST_ASSERT_TRUE(decodeElm(rec, out));
+  TEST_ASSERT_EQUAL_UINT8(ELM_STATUS_NO_DATA, out.status);
+  TEST_ASSERT_EQUAL_UINT8(0, out.nbytes);
+}
+
+void test_elm_encode_rejects_inconsistent() {
+  uint8_t buf[LOG_MAX_RECORD];
+  ElmRecord e = rpmReading();
+  e.status = ELM_STATUS_NO_DATA;               // NO DATA but claims 2 data bytes
+  TEST_ASSERT_EQUAL(0, encodeElm(e, 1, 0, buf, sizeof buf));
+  e = rpmReading(); e.nbytes = 5;              // more than 4 bytes
+  TEST_ASSERT_EQUAL(0, encodeElm(e, 1, 0, buf, sizeof buf));
+  e = rpmReading(); e.status = 3;              // unknown status
+  TEST_ASSERT_EQUAL(0, encodeElm(e, 1, 0, buf, sizeof buf));
+  TEST_ASSERT_EQUAL(0, encodeElm(rpmReading(), 1, 0, buf, 10));   // no room
+}
+
+void test_elm_decode_rejects_bad_payload() {
+  Record rec = {}; rec.type = REC_ELM; rec.len = ELM_PAYLOAD_BYTES;
+  rec.payload[0] = 0x0C; rec.payload[1] = ELM_STATUS_OK; rec.payload[2] = 2;
+  ElmRecord out;
+  TEST_ASSERT_TRUE(decodeElm(rec, out));
+  rec.payload[2] = 5;                          // nbytes too big
+  TEST_ASSERT_FALSE(decodeElm(rec, out));
+  rec.payload[2] = 2; rec.payload[1] = ELM_STATUS_NO_DATA;   // NO DATA with data bytes
+  TEST_ASSERT_FALSE(decodeElm(rec, out));
+  rec.payload[1] = 9;                          // unknown status
+  TEST_ASSERT_FALSE(decodeElm(rec, out));
+  rec.payload[1] = ELM_STATUS_OK; rec.len = 6; // wrong length
+  TEST_ASSERT_FALSE(decodeElm(rec, out));
+  rec.len = ELM_PAYLOAD_BYTES; rec.type = REC_GPS;   // wrong type
+  TEST_ASSERT_FALSE(decodeElm(rec, out));
+}
+
+void test_elm_failed_decode_leaves_output_untouched() {
+  Record rec = {}; rec.type = REC_ELM; rec.len = ELM_PAYLOAD_BYTES; rec.payload[2] = 9;
+  ElmRecord out = rpmReading();
+  TEST_ASSERT_FALSE(decodeElm(rec, out));
+  TEST_ASSERT_EQUAL_UINT8(0x0C, out.pid);
+  TEST_ASSERT_EQUAL_UINT8(2, out.nbytes);
+}
+
+void test_elm_voltage_pseudo_pid() {
+  uint8_t buf[LOG_MAX_RECORD];
+  ElmRecord v = {}; v.pid = ELM_PID_ADAPTER_VOLTAGE; v.status = ELM_STATUS_OK; v.nbytes = 2;
+  v.raw[0] = 12100 >> 8; v.raw[1] = 12100 & 0xFF;          // 12.1 V as millivolts, big-endian
+  size_t n = encodeElm(v, 3, 0, buf, sizeof buf);
+  Record rec; size_t used; ElmRecord out;
+  decodeRecord(buf, n, rec, used);
+  TEST_ASSERT_TRUE(decodeElm(rec, out));
+  TEST_ASSERT_EQUAL_UINT16(12100, (uint16_t)((out.raw[0] << 8) | out.raw[1]));
+}
+
+void test_mixed_gps_and_elm_stream() {
+  uint8_t stream[256]; size_t pos = 0;
+  pos += encodeGps(sample(), 1, 1000, stream + pos, sizeof stream - pos);
+  pos += encodeElm(rpmReading(), 2, 1010, stream + pos, sizeof stream - pos);
+  pos += encodeGps(sample(), 3, 1200, stream + pos, sizeof stream - pos);
+  size_t at = 0, gps = 0, elm = 0;
+  while (at < pos) {
+    Record rec; size_t used;
+    TEST_ASSERT_EQUAL((int)DecodeResult::OK, (int)decodeRecord(stream + at, pos - at, rec, used));
+    GpsRecord g; ElmRecord e;
+    if (decodeGps(rec, g)) gps++;
+    else if (decodeElm(rec, e)) elm++;
+    at += used;
+  }
+  TEST_ASSERT_EQUAL(2, gps);
+  TEST_ASSERT_EQUAL(1, elm);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_crc_known_vector);
@@ -128,5 +244,14 @@ int main() {
   RUN_TEST(test_oversize_payload_rejected);
   RUN_TEST(test_no_room_rejected);
   RUN_TEST(test_file_header);
+  RUN_TEST(test_elm_record_size);
+  RUN_TEST(test_elm_round_trip);
+  RUN_TEST(test_elm_unused_raw_bytes_are_zero);
+  RUN_TEST(test_elm_no_data_has_no_value);
+  RUN_TEST(test_elm_encode_rejects_inconsistent);
+  RUN_TEST(test_elm_decode_rejects_bad_payload);
+  RUN_TEST(test_elm_failed_decode_leaves_output_untouched);
+  RUN_TEST(test_elm_voltage_pseudo_pid);
+  RUN_TEST(test_mixed_gps_and_elm_stream);
   return UNITY_END();
 }
