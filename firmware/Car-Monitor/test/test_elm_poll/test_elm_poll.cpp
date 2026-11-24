@@ -129,7 +129,8 @@ void test_different_failure_kinds_map_to_error() {
   TEST_ASSERT_EQUAL_UINT8(POLL_LOG_NO_DATA, elmLogStatus(ElmStatus::NO_DATA));
   TEST_ASSERT_EQUAL_UINT8(POLL_LOG_ERROR, elmLogStatus(ElmStatus::BAD_FORMAT));
   TEST_ASSERT_EQUAL_UINT8(POLL_LOG_ERROR, elmLogStatus(ElmStatus::WRONG_PID));
-  TEST_ASSERT_EQUAL_UINT8(POLL_LOG_ERROR, elmLogStatus(ElmStatus::UNABLE_TO_CONNECT));
+  TEST_ASSERT_EQUAL_UINT8(POLL_LOG_NO_DATA, elmLogStatus(ElmStatus::UNABLE_TO_CONNECT));   // silent car
+  TEST_ASSERT_EQUAL_UINT8(POLL_LOG_ERROR, elmLogStatus(ElmStatus::BUS_ERROR));
 }
 
 void test_codes_match_the_log_format() {
@@ -147,6 +148,25 @@ static ElmPoll keyOff(uint32_t& now) {
   for (int i = 0; i < POLL_KEYOFF_NODATA_RUN; i++) step(p, ElmStatus::NO_DATA, now++);
   now--;
   return p;
+}
+
+void test_unable_to_connect_means_key_off_not_a_lost_adapter() {
+  ElmPoll p = fresh(); takeVoltage(p, 0);
+  for (int i = 0; i < POLL_KEYOFF_NODATA_RUN; i++) step(p, ElmStatus::UNABLE_TO_CONNECT, 100 + i);
+  TEST_ASSERT_EQUAL((int)PollMode::KEY_OFF, (int)pollMode(p));
+  for (int i = 1; i <= 20; i++) {                                    // a minute of probes, all unanswered
+    PollRequest r;
+    uint32_t t = 100 + i * 3000;
+    if (pollNext(p, t, r)) answer(p, ElmStatus::UNABLE_TO_CONNECT, t);
+  }
+  TEST_ASSERT_EQUAL((int)PollMode::KEY_OFF, (int)pollMode(p));       // never DOWN, however many arrive
+}
+
+void test_unable_to_connect_is_logged_once_as_no_data() {
+  ElmPoll p = fresh(); takeVoltage(p, 0);
+  ask(p, 1); PollLog l = answer(p, ElmStatus::UNABLE_TO_CONNECT, 1);
+  TEST_ASSERT_TRUE(l.log);
+  TEST_ASSERT_EQUAL_UINT8(POLL_LOG_NO_DATA, l.status);
 }
 
 void test_four_no_data_is_not_key_off() {
@@ -363,6 +383,8 @@ int main() {
   RUN_TEST(test_error_then_no_data_both_logged);
   RUN_TEST(test_different_failure_kinds_map_to_error);
   RUN_TEST(test_codes_match_the_log_format);
+  RUN_TEST(test_unable_to_connect_means_key_off_not_a_lost_adapter);
+  RUN_TEST(test_unable_to_connect_is_logged_once_as_no_data);
   RUN_TEST(test_four_no_data_is_not_key_off);
   RUN_TEST(test_five_no_data_in_a_row_is_key_off);
   RUN_TEST(test_an_ok_reading_breaks_the_no_data_run);

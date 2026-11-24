@@ -5,7 +5,7 @@
 // A small ring buffer that remembers the most recent encoded records while no trip file is open,
 // so the first seconds of a drive are not lost to the "wait for movement" delay.
 // Pure code with no Arduino calls, so it runs in native tests.
-constexpr uint8_t PREROLL_SLOTS      = 25;   // about 5 s of GPS records at 5 Hz
+constexpr uint8_t PREROLL_SLOTS      = 100;  // about 4 s of GPS (5 Hz) plus OBD (about 15 readings/s)
 constexpr size_t  PREROLL_SLOT_BYTES = 80;   // must be >= the largest encoded record
 
 struct PreRoll {

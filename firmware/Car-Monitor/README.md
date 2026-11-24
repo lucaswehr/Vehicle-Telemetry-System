@@ -6,8 +6,8 @@ It is being built in stages: a single-loop baseline first, then more sensors, th
 with measurements at each step.
 
 **Status:** GPS and SD logging work on the bench and on two short test drives (both logs read back
-with no CRC failures, sequence gaps or stalls). ELM327 Bluetooth polling is proven in the car and the OBD log record exists, but the logger does not
-poll yet. Not yet built: IMU, barometer, display, FreeRTOS tasks.
+with no CRC failures, sequence gaps or stalls). ELM327 polling, the 3.5" display and the combined "car" firmware are written and unit-tested on the PC but
+not yet verified in the car. Not yet built: IMU, barometer, FreeRTOS split of the main loop, battery-drain alarm.
 
 ## What works today
 
@@ -36,6 +36,8 @@ poll yet. Not yet built: IMU, barometer, display, FreeRTOS tasks.
 | ESP32 DevKit V1 (original ESP32) | USB (CP2102) |
 | u-blox NEO-7M GPS | UART2: GPS TX to GPIO16 (RX), GPS RX to GPIO17 (TX), 9600 baud |
 | microSD module | SPI (VSPI): CS GPIO5, SCK 18, MISO 19, MOSI 23. **Power from VIN (5 V)**, see bug log |
+| Hosyond 3.5" IPS 320x480, ST7796U + FT6336U touch | Own SPI bus (HSPI): CS 15, RESET 26, DC 27, MOSI 13, SCK 14, backlight 25, MISO unused. Touch (I2C): SDA 21, SCL 22, RST 4, INT 35. **VCC to VIN (5 V)**. Needs `-DTFT_INVERSION_ON=1` (colors are inverted otherwise) |
+| ELM327 Bluetooth Classic adapter | Bluetooth, no pins. Address and PIN are set at the top of `src/elm327.cpp` |
 
 ## Build, flash, test
 
@@ -46,6 +48,9 @@ pio device monitor                # serial status at 115200
 pio test -e native                # unit tests on the PC (run in WSL on Windows)
 pio run -e sd_test -t upload      # standalone SD card bring-up test
 pio run -e elm_test -t upload     # ELM327 Bluetooth bring-up test (run in the car)
+pio run -e display_test -t upload # display colors, orientation and touch check
+pio run -e dash_demo -t upload    # the three dashboard pages with fake data (tap to change page)
+pio run -e car -t upload          # everything together: GPS + SD log + OBD-II + screen
 ```
 
 The serial monitor prints two lines per second: GPS status, SD state (`READY (waiting for
@@ -98,9 +103,11 @@ region costs only the records inside it.
 ```
 lib/      pure logic, no Arduino calls, unit-tested on the PC
   nmea/ gps_status/ ubx/ logfmt/ sdstate/ tripname/ metrics/ movetrigger/ preroll/
-src/      hardware code: gps.cpp, logger.cpp, main.cpp, sd_test.cpp
+  elm_parse/ elm_poll/ dashmodel/ places/
+src/      hardware code: gps.cpp, logger.cpp, main.cpp (logger only), main_full.cpp (the car firmware),
+          elm327.cpp (Bluetooth task), display_ui.cpp (screen), plus the bring-up sketches
 test/     one folder per library (Unity)
-tools/    read_trip.py, make_test_trip.py
+tools/    read_trip.py, make_test_trip.py, make_places.py
 docs/     baseline_results.md
 ```
 
@@ -143,6 +150,18 @@ These stalls are what the FreeRTOS version will be measured against.
   with the US daylight saving rules applied. The name is chosen when the file is created (which now
   happens once the car is moving, so the GPS date is always valid), so there is no rename step.
 
+## Dashboard and live OBD data
+
+The `car` build runs the ELM327 in its own FreeRTOS task (core 0), so connecting and waiting for the
+adapter never stalls GPS, SD logging or the screen. `lib/elm_poll` decides what to ask (RPM, speed,
+throttle and load every cycle, one slower PID per cycle, battery voltage every 10 s), spots key-off
+from a run of NO DATA and reconnects with backoff. `lib/dashmodel` turns the readings into the text
+and alert colors for three portrait pages: DRIVE (speed, RPM, throttle, load, coolant, voltage),
+LOCATION (altitude, lat/lon, nearest city, heading, trip distance, top speed, trip time) and
+SYSTEM (SD, ELM327, GPS, satellites). A missing or stale reading shows `--`, never 0. Alert
+thresholds are constants at the top of `lib/dashmodel/dashmodel.h`. The city comes from an offline
+table built by `tools/make_places.py` from a GeoNames file (`cities1000.txt`, US places).
+
 ## Known limitations
 
 - File-name dates assume the Pacific time zone (`LOCAL_STD_OFFSET_HOURS` in `src/logger.cpp`); US daylight saving is applied automatically.
@@ -162,7 +181,7 @@ These stalls are what the FreeRTOS version will be measured against.
 
 ## Roadmap
 
-1. IMU (MPU6050) and barometer over I2C, new log record types
-2. OBD-II over an ELM327 Bluetooth adapter, with a parser tested against recorded replies
-3. FreeRTOS tasks (sensors, logging, display) and a before/after comparison of the baseline numbers
-4. Display, parked-battery-drain alarm with deep sleep
+1. Verify the `car` firmware in the car, then re-measure loop timing against the baseline
+2. IMU (MPU6050) and barometer over I2C, new log record types
+3. Move the remaining loop work (GPS, logging, display) into FreeRTOS tasks and compare with the baseline
+4. Parked-battery-drain alarm with deep sleep

@@ -86,5 +86,5 @@ void pollOnReconnect(ElmPoll& p, bool ok, uint32_t nowMs);        // ok: back to
 
 inline PollMode pollMode(const ElmPoll& p) { return p.mode; }
 
-uint8_t  elmLogStatus(ElmStatus s);                  // OK -> 0, NO DATA -> 1, everything else -> 2
+uint8_t  elmLogStatus(ElmStatus s);                  // OK -> 0, NO DATA or UNABLE TO CONNECT -> 1, everything else -> 2
 uint16_t pollVoltageMv(float volts);                 // rounded millivolts for the voltage record

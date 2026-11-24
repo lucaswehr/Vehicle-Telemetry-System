@@ -36,7 +36,7 @@ void pollInit(ElmPoll& p, uint32_t gapMs) {
 
 uint8_t elmLogStatus(ElmStatus s) {
   if (s == ElmStatus::OK) return POLL_LOG_OK;
-  if (s == ElmStatus::NO_DATA) return POLL_LOG_NO_DATA;
+  if (s == ElmStatus::NO_DATA || s == ElmStatus::UNABLE_TO_CONNECT) return POLL_LOG_NO_DATA;   // the car did not answer
   return POLL_LOG_ERROR;
 }
 
@@ -81,7 +81,7 @@ bool pollNext(ElmPoll& p, uint32_t nowMs, PollRequest& req) {
 // Replies that mean the adapter itself is not working (silence, garbage, bus trouble). A "?" or a refusal
 // still proves the adapter is alive and talking.
 static bool countsAsLinkFailure(ElmStatus s) {
-  return s == ElmStatus::BAD_FORMAT || s == ElmStatus::BUS_ERROR || s == ElmStatus::UNABLE_TO_CONNECT;
+  return s == ElmStatus::BAD_FORMAT || s == ElmStatus::BUS_ERROR;
 }
 
 void pollOnLinkLost(ElmPoll& p, uint32_t nowMs) {
@@ -115,8 +115,10 @@ void pollOnResult(ElmPoll& p, ElmStatus status, uint32_t nowMs, PollLog& log) {
       p.noDataRun = 0;
       if (p.mode == PollMode::KEY_OFF) { p.mode = PollMode::NORMAL; p.slot = 0; }   // key is back on
     }
-  } else if (status == ElmStatus::NO_DATA) {
-    p.failRun = 0;                               // the adapter answered, the car just did not
+  } else if (status == ElmStatus::NO_DATA || status == ElmStatus::UNABLE_TO_CONNECT) {
+    // The adapter answered; the car did not. With the key off a J1850 car gives "UNABLE TO CONNECT"
+    // (after the adapter searches for a protocol), so it counts as silence, not as a lost adapter.
+    p.failRun = 0;
     if (isPid) {
       if (p.noDataRun < 255) p.noDataRun++;
       if (p.mode == PollMode::NORMAL && p.noDataRun >= POLL_KEYOFF_NODATA_RUN) {

@@ -273,6 +273,24 @@ void loggerUpdate(const GpsFix& fix, GpsStatus st, uint32_t fixCount) {
     noteFlush(flushBuf());
 }
 
+// One OBD reading. It goes through the same buffer as the GPS records, so the file stays in the order the
+// records were made and the sequence numbers cover both kinds.
+void loggerLogElm(const ElmRecord& e, uint32_t tMs) {
+  uint8_t rec[LOG_MAX_RECORD];
+  size_t n = encodeElm(e, seq++, tMs, rec, sizeof rec);
+  if (!n) return;
+  if (health.state == SdState::LOGGING) {
+    if (used + n > sizeof buf) noteFlush(flushBuf());
+    if (health.state != SdState::LOGGING || used + n > sizeof buf) { dropped++; return; }
+    memcpy(buf + used, rec, n);
+    used += n;
+    pendingRecs++;
+    records++;
+  } else if (health.state == SdState::ARMED) {
+    preRollPush(preroll, rec, n);            // keep the lead-in to the drive, like GPS records
+  }
+}
+
 SdState  loggerState()         { return health.state; }
 uint32_t loggerRecords()       { return records; }
 uint32_t loggerDropped()       { return dropped; }
