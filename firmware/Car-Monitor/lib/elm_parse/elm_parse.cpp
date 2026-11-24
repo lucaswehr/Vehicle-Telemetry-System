@@ -134,10 +134,13 @@ ElmStatus elmParseMode01(const char* raw, uint8_t pid, float& value) {
   return s;
 }
 
-bool elmMode01Request(uint8_t pid, char* out, size_t cap) {
-  if (!out || cap < 5) return false;
+bool elmMode01Request(uint8_t pid, char* out, size_t cap, uint8_t responses) {
+  size_t need = responses ? 6 : 5;
+  if (!out || cap < need || responses > 9) return false;
   const char* hex = "0123456789ABCDEF";
-  out[0] = '0'; out[1] = '1'; out[2] = hex[pid >> 4]; out[3] = hex[pid & 15]; out[4] = '\0';
+  out[0] = '0'; out[1] = '1'; out[2] = hex[pid >> 4]; out[3] = hex[pid & 15];
+  if (responses) { out[4] = (char)('0' + responses); out[5] = '\0'; }
+  else           { out[4] = '\0'; }
   return true;
 }
 

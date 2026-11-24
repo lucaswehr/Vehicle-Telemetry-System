@@ -264,6 +264,26 @@ void test_request_text() {
   TEST_ASSERT_FALSE(elmMode01Request(0x0C, r, 4));          // no room for the terminator
   TEST_ASSERT_FALSE(elmMode01Request(0x0C, nullptr, 8));
 }
+void test_request_with_response_count() {
+  char r[8];
+  TEST_ASSERT_TRUE(elmMode01Request(PID_RPM, r, sizeof r, 1));
+  TEST_ASSERT_TRUE(strcmp(r, "010C1") == 0);
+  TEST_ASSERT_TRUE(elmMode01Request(PID_SPEED_KMH, r, sizeof r, 9));
+  TEST_ASSERT_TRUE(strcmp(r, "010D9") == 0);
+  TEST_ASSERT_TRUE(elmMode01Request(PID_RPM, r, sizeof r, 0));
+  TEST_ASSERT_TRUE(strcmp(r, "010C") == 0);                 // 0 = no digit
+  TEST_ASSERT_FALSE(elmMode01Request(PID_RPM, r, sizeof r, 10));   // not a single digit
+  TEST_ASSERT_FALSE(elmMode01Request(PID_RPM, r, 5, 1));    // room for "010C" but not the digit and the terminator
+  TEST_ASSERT_TRUE(elmMode01Request(PID_RPM, r, 6, 1));
+}
+void test_reply_to_a_counted_request_parses_the_same() {
+  float v = SENTINEL;                                       // the adapter's answer looks the same with or without the digit
+  TEST_ASSERT_TRUE(elmParseMode01("41 0C 1A F8\r\r>", PID_RPM, v) == ElmStatus::OK);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 1726.0f, v);
+  v = SENTINEL;                                             // and an echoed "010C1" line is ignored, not mistaken for data
+  TEST_ASSERT_TRUE(elmParseMode01("010C1\r41 0C 1A F8\r\r>", PID_RPM, v) == ElmStatus::OK);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 1726.0f, v);
+}
 
 // ---- which PIDs does the car answer ----
 void test_supported_mask() {
@@ -357,6 +377,8 @@ int main() {
   RUN_TEST(test_fuel_trims_are_signed);
   RUN_TEST(test_maf_and_ecu_voltage_two_bytes);
   RUN_TEST(test_request_text);
+  RUN_TEST(test_request_with_response_count);
+  RUN_TEST(test_reply_to_a_counted_request_parses_the_same);
   RUN_TEST(test_supported_mask);
   RUN_TEST(test_supported_second_block);
   RUN_TEST(test_supported_failures);

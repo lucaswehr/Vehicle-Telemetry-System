@@ -45,8 +45,11 @@ ElmStatus elmParseMode01(const char* raw, uint8_t pid, float& value);
 const char* elmStatusName(ElmStatus s);
 
 // Builds the request text for a mode 01 PID, for example PID 0x0C gives "010C" (without the carriage
-// return). Returns false if the buffer is too small.
-bool elmMode01Request(uint8_t pid, char* out, size_t cap);
+// return). `responses` (1..9) appends the digit that tells the adapter how many answers to expect, for
+// example "010C1": the adapter then replies as soon as that many have arrived instead of waiting out its
+// timeout, which can make each query several times faster. 0 leaves it off. Returns false if the
+// buffer is too small or responses is above 9.
+bool elmMode01Request(uint8_t pid, char* out, size_t cap, uint8_t responses = 0);
 
 // ---------- Which PIDs does the car answer? ----------
 // Ask PID 0x00 (covers 0x01..0x20), then 0x20 (0x21..0x40), then 0x40 (0x41..0x60). Each answer is a

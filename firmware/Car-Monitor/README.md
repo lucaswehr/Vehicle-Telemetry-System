@@ -45,6 +45,7 @@ pio run -e bench -t upload        # same, but logs without waiting for movement 
 pio device monitor                # serial status at 115200
 pio test -e native                # unit tests on the PC (run in WSL on Windows)
 pio run -e sd_test -t upload      # standalone SD card bring-up test
+pio run -e elm_test -t upload     # ELM327 Bluetooth bring-up test (run in the car)
 ```
 
 The serial monitor prints two lines per second: GPS status, SD state (`READY (waiting for
