@@ -59,6 +59,24 @@ size_t encodeGps(const GpsRecord& g, uint32_t seq, uint32_t tMs,
   return encodeRecord(REC_GPS, seq, tMs, p, GPS_PAYLOAD_BYTES, out, cap);
 }
 
+static bool elmValid(const ElmRecord& e) {
+  if (e.status > ELM_STATUS_ERROR) return false;
+  if (e.nbytes > ELM_RAW_MAX) return false;
+  if (e.status != ELM_STATUS_OK && e.nbytes != 0) return false;
+  return true;
+}
+
+size_t encodeElm(const ElmRecord& e, uint32_t seq, uint32_t tMs,
+                 uint8_t* out, size_t cap) {
+  if (!elmValid(e)) return 0;
+  uint8_t p[ELM_PAYLOAD_BYTES] = {0};
+  p[0] = e.pid;
+  p[1] = e.status;
+  p[2] = e.nbytes;
+  for (uint8_t i = 0; i < e.nbytes; i++) p[3 + i] = e.raw[i];   // bytes past nbytes stay zero
+  return encodeRecord(REC_ELM, seq, tMs, p, ELM_PAYLOAD_BYTES, out, cap);
+}
+
 DecodeResult decodeRecord(const uint8_t* buf, size_t n, Record& rec, size_t& consumed) {
   consumed = 0;
   if (n == 0) return DecodeResult::NEED_MORE;
@@ -97,5 +115,17 @@ bool decodeGps(const Record& rec, GpsRecord& g) {
   g.sats          = p[14];
   g.status        = p[15];
   g.utcMs         = get32(p + 16);
+  return true;
+}
+
+bool decodeElm(const Record& rec, ElmRecord& e) {
+  if (rec.type != REC_ELM || rec.len != ELM_PAYLOAD_BYTES) return false;
+  ElmRecord t;
+  t.pid    = rec.payload[0];
+  t.status = rec.payload[1];
+  t.nbytes = rec.payload[2];
+  for (uint8_t i = 0; i < ELM_RAW_MAX; i++) t.raw[i] = rec.payload[3 + i];
+  if (!elmValid(t)) return false;
+  e = t;
   return true;
 }

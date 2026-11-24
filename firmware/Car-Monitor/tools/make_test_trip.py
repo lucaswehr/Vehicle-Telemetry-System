@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
-"""Read a TLOG trip file written by the ESP32 logger and print a health + trip summary.
+"""Generate TLOG test files with known contents, so read_trip.py can be checked against known answers.
 
-Format (little-endian):
-  file header : 'TLOG' + version byte                              (5 bytes)
-  record      : magic 0xA5, type, len, seq(u32), tMs(u32), payload, crc16(u16)
-  GPS payload : latE7(i32) lonE7(i32) speedCentiMph(u16) altDeciM(i16)
-                headingDeci(u16) sats(u8) status(u8) utcMs(u32)    (20 bytes)
-  CRC         : CRC-16/CCITT-FALSE over magic..payload
-Status byte: 0 = LINK_LOST, 1 = NO_FIX, 2 = OK (trustworthy position)
+  python make_test_trip.py clean.bin            GPS + OBD, nothing wrong
+  python make_test_trip.py damaged.bin --damage  same, plus: one flipped bit, garbage bytes, two
+                                                 dropped records, a truncated last record
+
+Prints what the reader should report. The encoders mirror lib/logfmt (little-endian, CRC-16/CCITT-FALSE).
 """
 import argparse
 import math
+import random
 import struct
-import sys
 
 MAGIC = 0xA5
-HEADER_LEN = 11
-MAX_PAYLOAD = 64
-REC_GPS = 1
-GPS_FMT = "<iiHhHBBI"
-GPS_LEN = struct.calcsize(GPS_FMT)  # 20
+REC_GPS, REC_ELM = 1, 3
+ELM_OK, ELM_NO_DATA, ELM_ERROR = 0, 1, 2
+PID_ADAPTER_VOLTAGE = 0xF0
 
 
 def crc16(data: bytes) -> int:
@@ -31,170 +27,103 @@ def crc16(data: bytes) -> int:
     return crc
 
 
-def haversine_m(lat1, lon1, lat2, lon2):
-    r = 6371000.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = p2 - p1, math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
+def record(rtype, seq, tms, payload):
+    body = struct.pack("<BBBII", MAGIC, rtype, len(payload), seq, tms) + payload
+    return body + struct.pack("<H", crc16(body))
 
 
-def parse(data: bytes):
-    """Walk the file. Returns (records, stats). Bad data costs one byte, then we resync."""
-    stats = dict(version=None, header_ok=False, records=0, crc_failures=0,
-                 bytes_skipped=0, unknown_types=0, seq_gaps=0, seq_missing=0,
-                 time_gaps=0, time_gap_ms=0, truncated_tail=0)
-    if data[:4] != b"TLOG" or len(data) < 5:
-        return [], stats
-    stats["header_ok"] = True
-    stats["version"] = data[4]
-
-    recs = []
-    i = 5
-    expect_seq = None
-    last_t = None
-    n = len(data)
-    while i < n:
-        if data[i] != MAGIC:
-            stats["bytes_skipped"] += 1
-            i += 1
-            continue
-        if n - i < HEADER_LEN:
-            stats["truncated_tail"] = n - i
-            break
-        length = data[i + 2]
-        if length > MAX_PAYLOAD:
-            stats["bytes_skipped"] += 1
-            i += 1
-            continue
-        total = HEADER_LEN + length + 2
-        if n - i < total:
-            stats["truncated_tail"] = n - i
-            break
-        body = data[i:i + HEADER_LEN + length]
-        stored = struct.unpack_from("<H", data, i + HEADER_LEN + length)[0]
-        if crc16(body) != stored:
-            stats["crc_failures"] += 1
-            stats["bytes_skipped"] += 1
-            i += 1
-            continue
-
-        rtype = data[i + 1]
-        seq, tms = struct.unpack_from("<II", data, i + 3)
-        payload = data[i + HEADER_LEN:i + HEADER_LEN + length]
-
-        if expect_seq is not None and seq != expect_seq:
-            stats["seq_gaps"] += 1
-            if seq > expect_seq:
-                stats["seq_missing"] += seq - expect_seq
-        expect_seq = seq + 1
-
-        if last_t is not None and tms - last_t > 1000:
-            stats["time_gaps"] += 1
-            stats["time_gap_ms"] += tms - last_t
-        last_t = tms
-
-        rec = dict(type=rtype, seq=seq, tms=tms)
-        if rtype == REC_GPS and length == GPS_LEN:
-            lat, lon, spd, alt, hdg, sats, status, utc = struct.unpack(GPS_FMT, payload)
-            rec.update(lat=lat / 1e7, lon=lon / 1e7, mph=spd / 100.0, alt_m=alt / 10.0,
-                       heading=hdg / 10.0, sats=sats, status=status, utc_ms=utc)
-        else:
-            stats["unknown_types"] += 1
-        recs.append(rec)
-        stats["records"] += 1
-        i += total
-    return recs, stats
+def gps_payload(lat, lon, mph, alt_m, heading, sats, status, utc_ms):
+    if status != 2:                     # firmware writes zeros unless the fix is OK
+        lat = lon = mph = 0
+    return struct.pack("<iiHhHBBI", int(lat * 1e7), int(lon * 1e7), int(mph * 100),
+                       int(alt_m * 10), int(heading * 10), sats, status, utc_ms)
 
 
-def fmt_utc(ms):
-    s = ms // 1000
-    return f"{s // 3600:02d}:{(s // 60) % 60:02d}:{s % 60:02d} UTC"
+def elm_payload(pid, status, raw=b""):
+    assert len(raw) <= 4 and (status == ELM_OK or not raw)
+    return struct.pack("<BBB4s", pid, status, len(raw), raw.ljust(4, b"\0"))
 
 
-def summarize(path, recs, st):
-    gps = [r for r in recs if "status" in r]
-    print(path)
-    if not st["header_ok"]:
-        print("  NOT A TLOG FILE (bad header)")
-        return
-    print(f"  format version:      {st['version']}")
-    print(f"  records read:        {st['records']}")
-    print(f"  CRC failures:        {st['crc_failures']}")
-    print(f"  bytes skipped:       {st['bytes_skipped']}")
-    print(f"  sequence gaps:       {st['seq_gaps']}  ({st['seq_missing']} records missing)")
-    print(f"  logging stalls >1s:  {st['time_gaps']}  ({st['time_gap_ms'] / 1000:.1f} s total)")
-    if st["truncated_tail"]:
-        print(f"  truncated last record: {st['truncated_tail']} bytes (power cut mid-write)")
-    if st["unknown_types"]:
-        print(f"  unknown record types: {st['unknown_types']}")
-    if not gps:
-        return
+def build(damage):
+    """Returns (file bytes, expectations dict)."""
+    rng = random.Random(1)
+    out = bytearray(b"TLOG\x01")
+    seq = 0
+    exp = dict(gps=0, obd_ok=0, obd_no_data=0)
+    spans = []                          # (start, end) of each record, for damage placement
 
-    names = {0: "LINK_LOST", 1: "NO_FIX", 2: "OK"}
-    counts = {k: sum(1 for r in gps if r["status"] == k) for k in names}
-    print("  GPS records by status: " + ", ".join(f"{names[k]} {v}" for k, v in counts.items()))
+    def emit(rtype, tms, payload):
+        nonlocal seq
+        r = record(rtype, seq, tms, payload)
+        spans.append((len(out), len(out) + len(r)))
+        out.extend(r)
+        seq += 1
 
-    dur = (gps[-1]["tms"] - gps[0]["tms"]) / 1000.0
-    print(f"  duration:            {dur:.1f} s ({st['records'] / dur:.2f} records/s)" if dur > 0
-          else "  duration:            0 s")
+    lat, lon = 46.7333, -117.1697
+    for i in range(60):                 # 12 s of 5 Hz GPS, with OBD between fixes
+        t = 1000 + i * 200
+        mph = min(40.0, 2.0 * i)
+        lat += 0.00001 * mph / 10
+        emit(REC_GPS, t, gps_payload(lat, lon, mph, 740.0, 90.0, 9, 2, 40000000 + i * 200))
+        exp["gps"] += 1
+        # fast PIDs every fix: RPM, speed; slow PIDs rotate; voltage now and then
+        rpm_raw = int(800 + mph * 40) * 4
+        emit(REC_ELM, t + 20, elm_payload(0x0C, ELM_OK, struct.pack(">H", rpm_raw)))
+        emit(REC_ELM, t + 40, elm_payload(0x0D, ELM_OK, bytes([int(mph * 1.609)])))
+        exp["obd_ok"] += 2
+        if i % 5 == 0:
+            emit(REC_ELM, t + 60, elm_payload(0x05, ELM_OK, bytes([90 + 40])))     # 90 C
+            exp["obd_ok"] += 1
+        if i % 20 == 0:
+            mv = 13800
+            emit(REC_ELM, t + 80, elm_payload(PID_ADAPTER_VOLTAGE, ELM_OK, struct.pack(">H", mv)))
+            exp["obd_ok"] += 1
+    t = 1000 + 60 * 200                 # key off: a NO DATA status-change record, no values
+    emit(REC_ELM, t, elm_payload(0x0C, ELM_NO_DATA))
+    exp["obd_no_data"] += 1
 
-    utcs = [r["utc_ms"] for r in gps if r["utc_ms"]]
-    if utcs:
-        print(f"  GPS time span:       {fmt_utc(utcs[0])} -> {fmt_utc(utcs[-1])}")
-    else:
-        print("  GPS time span:       none (module never reported a time)")
+    exp["records"] = seq
+    exp["damage"] = None
+    if not damage:
+        return bytes(out), exp
 
-    good = [r for r in gps if r["status"] == 2]
-    if good:
-        dist = 0.0
-        for a, b in zip(good, good[1:]):
-            if b["tms"] - a["tms"] <= 2000:
-                dist += haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
-        print(f"  distance (OK only):  {dist / 1609.344:.2f} mi")
-        print(f"  top speed:           {max(r['mph'] for r in good):.1f} mph")
-        print(f"  max satellites:      {max(r['sats'] for r in good)}")
-    else:
-        print("  no OK fixes in this file, so no distance or speed to report")
+    # Damage, applied back to front so earlier offsets stay valid.
+    out = bytearray(out)
+    # 1) truncate the last record (power cut mid-write)
+    last_s, last_e = spans[-1]
+    del out[last_e - 5:]
+    lost = 1
+    # 2) drop two whole records in the middle (shows up as a sequence gap of 2)
+    a = spans[100][0]; b = spans[101][1]
+    del out[a:b]
+    lost += 2
+    # 3) garbage bytes inserted (no record lost)
+    out[spans[60][0]:spans[60][0]] = bytes([0x00, 0xA5, 0x01, 0x14, 0x77])
+    # 4) flipped bit inside one record's payload: that record is lost
+    s0 = spans[30][0]
+    out[s0 + 12] ^= 0x10
+    lost += 1
+    exp["damage"] = dict(records_lost=lost, seq_missing_min=2, crc_failures_min=1)
+    exp["records_read"] = seq - lost
+    return bytes(out), exp
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Summarize a TLOG trip file")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("file")
-    ap.add_argument("--csv", help="write GPS records to this CSV file")
-    ap.add_argument("--plot", action="store_true", help="plot the route and speed (needs matplotlib)")
+    ap.add_argument("--damage", action="store_true")
     args = ap.parse_args()
-
-    with open(args.file, "rb") as f:
-        data = f.read()
-    recs, st = parse(data)
-    summarize(args.file, recs, st)
-
-    gps = [r for r in recs if "status" in r]
-    if args.csv:
-        with open(args.csv, "w") as f:
-            f.write("seq,t_ms,status,lat,lon,mph,alt_m,heading,sats,utc_ms\n")
-            for r in gps:
-                f.write(f"{r['seq']},{r['tms']},{r['status']},{r['lat']:.7f},{r['lon']:.7f},"
-                        f"{r['mph']:.2f},{r['alt_m']:.1f},{r['heading']:.1f},{r['sats']},{r['utc_ms']}\n")
-        print(f"  wrote {len(gps)} rows to {args.csv}")
-    if args.plot:
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:
-            sys.exit("matplotlib not installed: pip install matplotlib")
-        good = [r for r in gps if r["status"] == 2]
-        if not good:
-            sys.exit("nothing to plot: no OK fixes")
-        fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4))
-        sc = a1.scatter([r["lon"] for r in good], [r["lat"] for r in good],
-                        c=[r["mph"] for r in good], s=6)
-        fig.colorbar(sc, ax=a1, label="mph")
-        a1.set_xlabel("longitude"); a1.set_ylabel("latitude"); a1.set_title("route")
-        a2.plot([r["tms"] / 1000 for r in good], [r["mph"] for r in good])
-        a2.set_xlabel("seconds since boot"); a2.set_ylabel("mph"); a2.set_title("speed")
-        plt.tight_layout()
-        plt.show()
+    data, exp = build(args.damage)
+    with open(args.file, "wb") as f:
+        f.write(data)
+    print(f"wrote {len(data)} bytes to {args.file}")
+    print(f"expected: {exp['gps']} GPS records, {exp['obd_ok']} OBD OK readings, "
+          f"{exp['obd_no_data']} OBD NO_DATA record, {exp['records']} records written")
+    if exp["damage"]:
+        d = exp["damage"]
+        print(f"damage: {d['records_lost']} records unreadable, so expect {exp['records_read']} read, "
+              f">= {d['crc_failures_min']} CRC failure, sequence gaps for the dropped records, "
+              f"a truncated last record")
 
 
 if __name__ == "__main__":

@@ -6,8 +6,8 @@ It is being built in stages: a single-loop baseline first, then more sensors, th
 with measurements at each step.
 
 **Status:** GPS and SD logging work on the bench and on two short test drives (both logs read back
-with no CRC failures, sequence gaps or stalls). Not yet built: IMU, barometer, OBD-II (ELM327),
-display, FreeRTOS tasks.
+with no CRC failures, sequence gaps or stalls). ELM327 Bluetooth polling is proven in the car and the OBD log record exists, but the logger does not
+poll yet. Not yet built: IMU, barometer, display, FreeRTOS tasks.
 
 ## What works today
 
@@ -45,6 +45,7 @@ pio run -e bench -t upload        # same, but logs without waiting for movement 
 pio device monitor                # serial status at 115200
 pio test -e native                # unit tests on the PC (run in WSL on Windows)
 pio run -e sd_test -t upload      # standalone SD card bring-up test
+pio run -e elm_test -t upload     # ELM327 Bluetooth bring-up test (run in the car)
 ```
 
 The serial monitor prints two lines per second: GPS status, SD state (`READY (waiting for
@@ -70,7 +71,7 @@ File header: `T L O G` + version byte (5 bytes).
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 1 | magic `0xA5` |
-| 1 | 1 | record type (1 = GPS, 2 = IMU, 3 = OBD, last two reserved) |
+| 1 | 1 | record type (1 = GPS, 2 = IMU (reserved), 3 = OBD) |
 | 2 | 1 | payload length |
 | 3 | 4 | sequence number |
 | 7 | 4 | `millis()` since boot |
@@ -81,6 +82,13 @@ GPS payload (20 bytes, 33 bytes per record in total): latitude and longitude ×1
 speed in 0.01 mph (u16), altitude in 0.1 m (i16), heading in 0.1° (u16), satellites (u8),
 status (u8: 0 link lost, 1 no fix, 2 OK), GPS time of day in ms (u32). Position and speed are
 written as zero unless the status is OK, so a bad fix can never look like a real position.
+
+OBD payload (7 bytes, 20 bytes per record in total): PID (u8), status (u8: 0 OK, 1 NO DATA, 2 error),
+number of data bytes (u8), then 4 raw bytes exactly as the car sent them (unused bytes are zero).
+The raw bytes are converted to units by the reader, so a formula fix never needs a firmware change.
+Only an OK record carries data: NO DATA and errors have zero data bytes, so a missing reading can
+never be mistaken for a value of 0. The adapter's own battery voltage uses pseudo-PID `0xF0`
+(millivolts, big-endian). Run `read_trip.py file.bin --obd-csv out.csv` to get one row per reading.
 
 A reader that hits a bad record skips one byte and looks for the next magic byte, so a damaged
 region costs only the records inside it.

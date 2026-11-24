@@ -10,6 +10,16 @@ constexpr size_t  LOG_CRC_BYTES         = 2;
 constexpr size_t  LOG_MAX_PAYLOAD       = 64;
 constexpr size_t  LOG_MAX_RECORD        = LOG_HEADER_BYTES + LOG_MAX_PAYLOAD + LOG_CRC_BYTES;
 constexpr size_t  GPS_PAYLOAD_BYTES     = 20;
+constexpr size_t  ELM_PAYLOAD_BYTES     = 7;
+constexpr uint8_t ELM_RAW_MAX           = 4;      // longest mode 01 answer we store (4 data bytes)
+
+// Status of one OBD reading. Anything but OK carries no data, so NO DATA can never look like 0.
+constexpr uint8_t ELM_STATUS_OK         = 0;
+constexpr uint8_t ELM_STATUS_NO_DATA    = 1;
+constexpr uint8_t ELM_STATUS_ERROR      = 2;      // adapter/bus error, bad reply, unsupported PID
+
+// Pseudo-PID for the adapter's own battery voltage (ATRV): millivolts, big-endian, in raw[0..1].
+constexpr uint8_t ELM_PID_ADAPTER_VOLTAGE = 0xF0;
 
 enum RecordType : uint8_t { REC_GPS = 1, REC_IMU = 2, REC_ELM = 3 };
 
@@ -22,6 +32,13 @@ struct GpsRecord {
   uint8_t  sats;
   uint8_t  status;          // 0 LINK_LOST, 1 NO_FIX, 2 OK
   uint32_t utcMs;           // GPS time of day in ms
+};
+
+struct ElmRecord {
+  uint8_t pid;                  // mode 01 PID, or ELM_PID_ADAPTER_VOLTAGE
+  uint8_t status;               // ELM_STATUS_*
+  uint8_t nbytes;               // valid bytes in raw (0 unless status is OK)
+  uint8_t raw[ELM_RAW_MAX];     // data bytes exactly as the car sent them (A, B, C, D)
 };
 
 struct Record {
@@ -46,6 +63,11 @@ size_t encodeRecord(uint8_t type, uint32_t seq, uint32_t tMs,
 size_t encodeGps(const GpsRecord& g, uint32_t seq, uint32_t tMs,
                  uint8_t* out, size_t cap);
 
+// Returns 0 (nothing written) if nbytes > 4, if status > 2, or if status is not OK but nbytes != 0.
+// Unused raw bytes are written as zero, so identical readings give identical records.
+size_t encodeElm(const ElmRecord& e, uint32_t seq, uint32_t tMs,
+                 uint8_t* out, size_t cap);
+
 // Decode one record from the start of buf.
 //   OK:        consumed = record size
 //   NEED_MORE: consumed = 0 (wait for more bytes)
@@ -53,3 +75,6 @@ size_t encodeGps(const GpsRecord& g, uint32_t seq, uint32_t tMs,
 DecodeResult decodeRecord(const uint8_t* buf, size_t n, Record& rec, size_t& consumed);
 
 bool decodeGps(const Record& rec, GpsRecord& g);
+
+// False for the wrong type or length, status > 2, nbytes > 4, or status != OK with nbytes != 0.
+bool decodeElm(const Record& rec, ElmRecord& e);
