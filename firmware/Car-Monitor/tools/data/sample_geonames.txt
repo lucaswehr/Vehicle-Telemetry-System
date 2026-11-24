@@ -1,0 +1,13 @@
+5815135	Pullman	Pullman		46.7313	-117.1796	P	PPL	US		WA	075			32901			America/Los_Angeles	2024-01-01
+5601538	Moscow	Moscow		46.7324	-117.0002	P	PPL	US		ID	057			25435			America/Boise	2024-01-01
+5811696	Colfax	Colfax		46.8801	-117.3636	P	PPL	US		WA	075			2805			America/Los_Angeles	2024-01-01
+5811840	Spokane	Spokane		47.6588	-117.426	P	PPLA2	US		WA	063			228989			America/Los_Angeles	2024-01-01
+5784430	Lewiston	Lewiston		46.4165	-117.0177	P	PPLA2	US		ID	069			34203			America/Boise	2024-01-01
+5809844	Seattle	Seattle		47.6062	-122.3321	P	PPLA2	US		WA	033			737015			America/Los_Angeles	2024-01-01
+5816605	Walla Walla	Walla Walla		46.0646	-118.343	P	PPLA2	US		WA	071			33953			America/Los_Angeles	2024-01-01
+5565433	Coeur d'Alene	Coeur d'Alene		47.6777	-116.7805	P	PPLA2	US		ID	055			54628			America/Boise	2024-01-01
+5586437	Boise	Boise		43.615	-116.2023	P	PPLA	US		ID	001			235684			America/Boise	2024-01-01
+5746545	Portland	Portland		45.5234	-122.6762	P	PPLA2	US		OR	051			652503			America/Los_Angeles	2024-01-01
+5816000	Moscow Mills	Moscow Mills		39.0	-90.9	P	PPL	US		MO	183			2500			America/Chicago	2024-01-01
+2643743	London	London		51.5085	-0.1257	P	PPLC	GB		ENG				8961989			Europe/London	2024-01-01
+1	Mount Rainier	Mount Rainier		46.85	-121.76	T	MT	US		WA				0			America/Los_Angeles	2024-01-01

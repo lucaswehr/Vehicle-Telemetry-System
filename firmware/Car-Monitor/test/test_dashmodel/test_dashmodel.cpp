@@ -24,7 +24,7 @@ static DashInput healthy() {
   in.gps = GpsStatus::OK; in.sats = 9;
   in.sd = SdState::LOGGING; in.sdFreeKnown = true; in.sdFreeMb = 15000;
   in.elm = ElmLink::LIVE;
-  strcpy(in.city, "Pullman"); in.cityKnown = true;
+  strcpy(in.city, "Pullman"); strcpy(in.cityState, "WA"); in.cityKnown = true;
   return in;
 }
 
@@ -219,6 +219,16 @@ void test_location_page_values() {
   expectField(p, "TRIP TIME", "0:00:01", Level::OK);
 }
 
+void test_city_state_shown_as_unit() {
+  DashPage p = build(healthy(), 1);
+  const DashField* f = find(p, "CITY");
+  TEST_ASSERT_TRUE(f != nullptr);
+  TEST_ASSERT_EQUAL_STRING("WA", f->unit);
+  DashInput in = healthy(); in.cityKnown = false;
+  p = build(in, 1);
+  TEST_ASSERT_EQUAL_STRING("", find(p, "CITY")->unit);       // no stale state next to "--"
+}
+
 void test_southern_and_eastern_hemispheres() {
   DashInput in = healthy();
   sampleSet(in.lat, -33.8688f, NOW);
@@ -394,6 +404,7 @@ int main() {
   RUN_TEST(test_conversions);
   RUN_TEST(test_compass);
   RUN_TEST(test_location_page_values);
+  RUN_TEST(test_city_state_shown_as_unit);
   RUN_TEST(test_southern_and_eastern_hemispheres);
   RUN_TEST(test_location_hidden_without_a_fix);
   RUN_TEST(test_location_stale_position_hidden);

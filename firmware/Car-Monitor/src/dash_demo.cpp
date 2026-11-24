@@ -84,6 +84,7 @@ static void simulate(uint32_t now) {
     sampleSet(in.headingDeg, 84.0f + 20.0f * sinf(t / 6.0f), now);
   }
   strcpy(in.city, "Pullman");
+  strcpy(in.cityState, "WA");
   in.cityKnown = fix;
 
   in.sd = (sc == 5) ? SdState::FULL : SdState::LOGGING;

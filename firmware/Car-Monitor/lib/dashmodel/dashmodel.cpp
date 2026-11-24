@@ -169,7 +169,10 @@ static void pageLocation(const DashInput& in, uint32_t now, DashPage& p) {
   if (gpsFresh(in, in.lon, now)) { formatDeg(f->value, sizeof f->value, in.lon.v, 'E', 'W'); f->level = Level::OK; }
 
   f = add(p, "CITY", "");
-  if (in.gps == GpsStatus::OK && in.cityKnown && in.city[0]) setText(f, in.city, Level::OK);
+  if (in.gps == GpsStatus::OK && in.cityKnown && in.city[0]) {
+    setText(f, in.city, Level::OK);
+    copyTo(f->unit, sizeof f->unit, in.cityState);          // "WA" appears small on the right of the row
+  }
 
   f = add(p, "HEADING", "");
   if (gpsFresh(in, in.headingDeg, now)) {

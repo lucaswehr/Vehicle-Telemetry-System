@@ -77,6 +77,7 @@ struct DashInput {
   ElmLink   elm = ElmLink::OFF;
   bool      cityKnown = false;
   char      city[24] = {0};
+  char      cityState[3] = {0};     // two-letter state, shown small beside the city
   TripStats trip;
 };
 
